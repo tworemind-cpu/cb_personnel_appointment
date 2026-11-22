@@ -1,5 +1,5 @@
 {
-  "version": "2.0.0",
-  "download_url": "https://github.com/tworemind-cpu/personnel_appointment/releases/latest",
-  "notes": "프로그램 GUI 및 설정 등 추가"
+  "version": "2.1.0",
+  "download_url": "https://github.com/tworemind-cpu/cb_personnel_appointment/releases/latest",
+  "notes": "충청북도교육청 전용 프로그램임을 명시"
 }

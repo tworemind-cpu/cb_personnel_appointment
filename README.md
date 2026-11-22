@@ -2,7 +2,7 @@
 
 ### 👉 [📥 다운로드 및 실행 방법](docs/실행방법.md)
 
-도교육청 인사발령서(한글 파일)에서 **선택한 지역의 전입·전출을 직급·직렬별로 자동 분류·정렬**하여 엑셀로 만들어 주는 Windows용 프로그램입니다.
+충청북도교육청 인사발령서(한글 파일)에서 **선택한 지역의 전입·전출을 직급·직렬별로 자동 분류·정렬**하여 엑셀로 만들어 주는 Windows용 프로그램입니다.
 복잡한 설정 없이, 인사발령서를 창 위로 끌어다 놓고 **[정리 시작]** 만 누르면 됩니다.
 
 > 현재 버전: **1.8.0**
@@ -13,7 +13,7 @@
 
 ## 📖 간단 사용법
 
-1. `personnel_appointment.exe`와 `기관현황.xlsx`를 **같은 폴더**에 둡니다.
+1. `cb_personnel_appointment.exe`와 `기관현황.xlsx`를 **같은 폴더**에 둡니다.
 2. 프로그램을 실행하고 인사발령서(`.hwp`, `.hwpx`)를 창 위로 끌어다 놓거나 **인사발령서 선택** 버튼을 누릅니다.
 3. 오른쪽에서 **지역**을 고릅니다.
 4. **정리 시작** 버튼을 누르면 잠시 후 결과 엑셀 파일이 자동으로 열립니다.
@@ -101,9 +101,9 @@
 
 ```
 인사발령정리/
-├─ personnel_appointment.exe   (프로그램)
+├─ cb_personnel_appointment.exe   (프로그램)
 ├─ 기관현황.xlsx                (직접 작성)
-└─ 인사발령정리_설정.json        (상태 기억을 켰을 때 자동 생성)
+└─ config.json        (상태 기억을 켰을 때 자동 생성)
 ```
 
 ---
@@ -112,31 +112,31 @@
 
 ```bash
 pip install pandas openpyxl customtkinter tkinterdnd2 pywin32
-python personnel_appointment.py
+python cb_personnel_appointment.py
 ```
 
 ### exe 파일 만들기
 
 ```bash
 pip install pyinstaller
-pyinstaller --onefile --noconsole --collect-all tkinterdnd2 --collect-all customtkinter personnel_appointment.py
+pyinstaller --onefile --noconsole --collect-all tkinterdnd2 --collect-all customtkinter cb_personnel_appointment.py
 ```
 
-완성된 `personnel_appointment.exe`는 `dist` 폴더에 생깁니다.
+완성된 `cb_personnel_appointment.exe`는 `dist` 폴더에 생깁니다.
 
 ### 업데이트 확인 설정
 
 프로그램은 아래 주소의 `version.json`을 읽어 새 버전을 확인합니다.
 
 ```
-https://raw.githubusercontent.com/tworemind-cpu/personnel_appointment/main/version.json
+https://raw.githubusercontent.com/tworemind-cpu/cb_personnel_appointment/main/version.json
 ```
 
 ```json
 {
-  "version": "2.0.0",
-  "download_url": "https://github.com/tworemind-cpu/personnel_appointment/releases/latest",
-  "notes": "프로그램 GUI 및 설정 등 추가"
+  "version": "2.1.0",
+  "download_url": "https://github.com/tworemind-cpu/xb_)cb_personnel_appointment/releases/latest",
+  "notes": "충청북도교육청 전용 프로그램임을 명시"
 }
 ```
 

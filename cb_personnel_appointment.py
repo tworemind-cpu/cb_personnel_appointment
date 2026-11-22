@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-지방공무원 인사발령 정리 프로그램
+충청북도교육청 지방공무원 인사발령 정리 프로그램
 
 [필요한 라이브러리 설치]
     pip install pandas openpyxl customtkinter tkinterdnd2 pywin32
@@ -40,8 +40,8 @@ from datetime import datetime
 # ==================================================
 # ★ 업데이트 확인 설정 (버전을 올릴 때는 아래 current_version만 고치세요)
 # ==================================================
-current_version = "2.0.0"
-version_info = "https://raw.githubusercontent.com/tworemind-cpu/personnel_appointment/main/version.json"
+current_version = "2.1.0"
+version_info = "https://raw.githubusercontent.com/tworemind-cpu/cb_personnel_appointment/main/version.json"
 
 # --- ★ 실행 파일(.exe) 기준 현재 폴더 경로 찾기 ---
 if getattr(sys, 'frozen', False):
@@ -908,7 +908,7 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
         super().__init__()
         self.TkdndVersion = TkinterDnD._require(self)
 
-        self.title(f"personnel_appointment v{current_version}")
+        self.title(f"충청북도교육청 지방공무원 인사발령 정리 v{current_version}")
         self.geometry("780x640")
         self.resizable(False, False)
         self.configure(fg_color=C_BG)
@@ -944,9 +944,9 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
     def build_ui(self):
         self.grid_columnconfigure(0, weight=1)
 
-        title = ctk.CTkLabel(self, text="인사발령 정리", font=ctk.CTkFont(FONT, 24, "bold"), text_color=C_TEXT)
+        title = ctk.CTkLabel(self, text="충청북도교육청 지방공무원 인사발령 정리", font=ctk.CTkFont(FONT, 24, "bold"), text_color=C_TEXT)
         title.grid(row=0, column=0, padx=28, pady=(22, 0), sticky="w")
-        sub = ctk.CTkLabel(self, text="도교육청 인사발령서에서 선택한 지역의 전입·전출을 정리해 엑셀로 저장합니다.",
+        sub = ctk.CTkLabel(self, text="충청북도교육청 인사발령서에서 선택한 지역의 전입·전출을 정리해 엑셀로 저장합니다.",
                            font=ctk.CTkFont(FONT, 13), text_color=C_SUB)
         sub.grid(row=1, column=0, padx=28, pady=(2, 14), sticky="w")
 
@@ -960,7 +960,7 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
         drop = ctk.CTkFrame(mid, fg_color=C_CARD, corner_radius=14, border_width=2, border_color=C_ACCENT)
         drop.grid(row=0, column=0, padx=(0, 10), sticky="nsew")
         ctk.CTkLabel(drop, text="📄", font=ctk.CTkFont(FONT, 38)).pack(pady=(22, 0))
-        ctk.CTkLabel(drop, text="도교육청 인사발령서를\n여기로 끌어다 놓으세요",
+        ctk.CTkLabel(drop, text="충청북도교육청 인사발령서를\n여기로 끌어다 놓으세요",
                      font=ctk.CTkFont(FONT, 15, "bold"), text_color=C_TEXT).pack(pady=(4, 2))
         ctk.CTkLabel(drop, text="(hwp, hwpx)", font=ctk.CTkFont(FONT, 12), text_color=C_SUB).pack()
         ctk.CTkButton(drop, text="인사발령서 선택", width=170, height=36, corner_radius=10,
@@ -1001,7 +1001,7 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
                         fg_color=C_ACCENT, hover_color=C_ACCENT_HOVER).grid(row=1, column=0, columnspan=3, padx=18, pady=(0, 8), sticky="w")
         ctk.CTkLabel(opt, text="결과물 저장 위치", font=ctk.CTkFont(FONT, 13, "bold"),
                      text_color=C_TEXT).grid(row=2, column=0, columnspan=3, padx=18, pady=(4, 4), sticky="w")
-        ctk.CTkRadioButton(opt, text="도교육청 인사발령서가 있는 폴더", variable=self.var_save_mode, value="same",
+        ctk.CTkRadioButton(opt, text="충청북도교육청 인사발령서가 있는 폴더", variable=self.var_save_mode, value="same",
                            font=ctk.CTkFont(FONT, 13), text_color=C_TEXT,
                            fg_color=C_ACCENT, hover_color=C_ACCENT_HOVER).grid(row=3, column=0, columnspan=3, padx=18, pady=3, sticky="w")
         ctk.CTkRadioButton(opt, text="직접 선택하여 저장 ([정리 시작]을 누르면 저장할 폴더를 묻습니다)",
@@ -1048,7 +1048,7 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
 
     def pick_file(self):
         path = filedialog.askopenfilename(
-            parent=self, title="도교육청 인사발령서 파일 선택",
+            parent=self, title="충청북도교육청 인사발령서 파일 선택",
             filetypes=[("한글 파일", "*.hwp *.hwpx"), ("모든 파일", "*.*")])
         if path:
             self.set_hwp(path)
@@ -1101,7 +1101,7 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
     # ---------- 정리 실행 ----------
     def start(self):
         if not self.hwp_path or not os.path.exists(self.hwp_path):
-            messagebox.showwarning("인사발령서 선택", "도교육청 인사발령서 파일을 먼저 선택해주세요.", parent=self)
+            messagebox.showwarning("인사발령서 선택", "충청북도교육청 인사발령서 파일을 먼저 선택해주세요.", parent=self)
             return
 
         region = self.var_region.get()
