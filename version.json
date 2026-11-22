@@ -1,5 +1,5 @@
 {
-  "version": "1.7.0",
+  "version": "2.0.0",
   "download_url": "https://github.com/tworemind-cpu/personnel_appointment/releases/latest",
-  "notes": "인사발령에 해당 없는 그룹 표시 생략, 새로운 버전이 있으면 알려주는 기능 추가"
+  "notes": "프로그램 GUI 및 설정 등 추가"
 }

@@ -1,3 +1,17 @@
+# -*- coding: utf-8 -*-
+"""
+지방공무원 인사발령 정리 프로그램
+
+[필요한 라이브러리 설치]
+    pip install pandas openpyxl customtkinter tkinterdnd2 pywin32
+
+[exe 만들 때 권장 옵션]
+    pyinstaller --onefile --noconsole --collect-all tkinterdnd2 --collect-all customtkinter 인사발령정리.py
+
+[실행 조건]
+    - exe(또는 py)와 같은 폴더에 '기관현황.xlsx' 파일이 있어야 합니다.
+    - 아래아한글(HWP)이 설치된 PC에서 실행해야 합니다.
+"""
 import pandas as pd
 import re
 import openpyxl
@@ -7,7 +21,10 @@ from openpyxl.worksheet.page import PageMargins
 from openpyxl.worksheet.pagebreak import Break
 import tkinter as tk
 from tkinter import filedialog, messagebox
+import customtkinter as ctk
+from tkinterdnd2 import TkinterDnD, DND_FILES
 import win32com.client as win32
+import win32com.client
 import os
 import sys
 import time
@@ -18,11 +35,12 @@ import json
 import webbrowser
 import urllib.request
 import urllib.parse
+from datetime import datetime
 
 # ==================================================
 # ★ 업데이트 확인 설정 (버전을 올릴 때는 아래 current_version만 고치세요)
 # ==================================================
-current_version = "1.7.0"
+current_version = "2.0.0"
 version_info = "https://raw.githubusercontent.com/tworemind-cpu/personnel_appointment/main/version.json"
 
 # --- ★ 실행 파일(.exe) 기준 현재 폴더 경로 찾기 ---
@@ -31,20 +49,30 @@ if getattr(sys, 'frozen', False):
 else:
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
+AGENCY_FILE = os.path.join(BASE_DIR, '기관현황.xlsx')
+SETTINGS_FILE = os.path.join(BASE_DIR, 'config.json')
+
+
+class AppError(Exception):
+    """사용자에게 팝업으로 알려줄 오류 (제목, 내용)"""
+    def __init__(self, title, message):
+        super().__init__(message)
+        self.title = title
+
+
 # --- ★ 업데이트 확인 함수 ---
 def parse_version(ver_str):
     """'1.2.3' 같은 문자열을 (1, 2, 3) 숫자 묶음으로 바꿉니다. (크기 비교용)"""
     nums = re.findall(r'\d+', str(ver_str))
     return tuple(int(n) for n in nums) if nums else (0,)
 
-def check_for_update():
+def check_for_update(parent=None):
     """
     깃허브의 version.json을 읽어 새 버전이 있으면 안내 팝업을 띄웁니다.
     - 인터넷이 안 되거나 주소가 틀려도 프로그램은 멈추지 않고 그냥 넘어갑니다.
-    - '예'를 누르면 다운로드 페이지를 열고 프로그램을 종료합니다.
+    - '예'를 누르면 다운로드 페이지를 열고 True(프로그램 종료 필요)를 돌려줍니다.
     """
     try:
-        # 주소에 한글이 들어 있어도 읽을 수 있도록 변환
         safe_url = urllib.parse.quote(version_info, safe=":/?=&%")
         req = urllib.request.Request(safe_url, headers={"User-Agent": "Mozilla/5.0"})
         with urllib.request.urlopen(req, timeout=5) as res:
@@ -55,7 +83,7 @@ def check_for_update():
         notes = str(data.get("notes", "")).strip()
 
         if not latest_version:
-            return
+            return False
 
         if parse_version(latest_version) > parse_version(current_version):
             msg = (f"새 버전이 나왔습니다.\n\n"
@@ -65,15 +93,15 @@ def check_for_update():
                 msg += f"\n[변경 내용]\n{notes}\n"
             msg += "\n지금 다운로드 페이지를 여시겠습니까?\n(예를 누르면 프로그램이 종료됩니다.)"
 
-            if messagebox.askyesno("업데이트 안내", msg):
+            if messagebox.askyesno("업데이트 안내", msg, parent=parent):
                 if download_url:
                     webbrowser.open(download_url)
-                sys.exit()
-    except SystemExit:
-        raise
+                return True
     except Exception:
         # 인터넷 연결 없음, 주소 오류, 파일 형식 오류 등 → 조용히 넘어감
         pass
+    return False
+
 
 # --- ★ 직급 비교용 함수 ---
 def get_rank_level(rank_str):
@@ -146,155 +174,92 @@ def get_series_and_group(rank_str):
     else:
         return 1, series
 
-# --- 0. UI 설정 및 파일 확인 ---
-root = tk.Tk()
-root.withdraw()
-root.attributes('-topmost', True)
+# ==================================================
+# ★ 기관현황.xlsx 읽기 (지역 목록 + 선택한 지역의 기관/부서 순서)
+# ==================================================
+# 아래 3개는 '선택한 지역'에 따라 apply_region()이 채워 넣습니다. (정렬/판정 함수들이 함께 사용)
+dept_order_map = {}
+sub_dept_order_map = {}
+local_agencies_for_sort = []
 
-# --- ★ 새 버전 확인 (프로그램 시작 직후 1회) ---
-check_for_update()
+ignore_keywords = [
+    '유치원', '초등학교', '중학교', '고등학교', '특수학교', '대안학교',
+    '교육지원청', '직속기관', '소속기관', '관내학교', '기관명', '부서명',
+    '행정과', '교육과', '총무과', '재정과', '행정국', '교육국', '기획국',
+    '체육건강과', '학교지원센터', '학교지원과', '학생지원과',
+    '유초등교육과', '중등교육과', '창의특수교육과', '인성시민과', '교원인사과',
+    '체육건강안전과', '노사정책과', '예산과', '정책기획과', '미래교육추진단',
+    '공보관', '감사관', '단설유치원', '병설유치원',
+    '행정실', '행정실장', '교무실', '사무관', '서기관', '부이사관',
+    '주사', '주사보', '서기', '서기보', '서기보시보', '주무관',
+    '지방교육행정', '지방사서', '지방전산', '지방시설',
+    '지방공업', '지방보건', '지방식품위생', '지방간호', '본청', '도교육청',
+    '교육도서관', '학생수련원', '단재교육연수원', '해양교육원', '유아교육진흥원', '특수교육원'
+]
 
-agency_path = os.path.join(BASE_DIR, '인사발령정리.xlsx')
-if not os.path.exists(agency_path):
-    messagebox.showerror("파일 누락 안내", f"현재 폴더에 [ 인사발령정리.xlsx ] 파일이 없습니다.\n해당 파일 내에 '기관현황' 시트가 필요합니다.")
-    sys.exit()
+# 엑셀에 적지 않아도 항상 포함되는 특수 기관명 (신규임용 표시용)
+ALWAYS_INCLUDED_AGENCIES = ['신규임용']
 
-print("==================================================")
-print("지방공무원 인사발령 정리 자동화 프로그램")
-print("==================================================\n")
 
-print("화면에 뜬 팝업창에서 '도교육청 인사발령서(hwp, hwpx)' 파일을 선택해주세요...")
-hwp_file_path = filedialog.askopenfilename(
-    title="도교육청 인사발령서 파일 선택",
-    filetypes=[("한글 파일", "*.hwp *.hwpx"), ("모든 파일", "*.*")]
-)
-
-if not hwp_file_path:
-    print("\n파일 선택이 취소되었습니다.")
-    time.sleep(2)
-    sys.exit()
-
-print(f"\n[선택된 파일]: {os.path.basename(hwp_file_path)}")
-print("한글 파일에서 데이터를 추출하고 있습니다...")
-
-temp_txt_path = os.path.join(BASE_DIR, "temp_발령서_임시추출.txt")
-text_list = []
-
-# ★ 한글 보안 팝업창 자동 허용 함수
-def auto_allow_popup():
-    VK_MENU = 0x12 
-    VK_N = 0x4E    
-    KEYEVENTF_KEYUP = 0x0002 
-
+def read_agency_table():
+    """기관현황.xlsx를 읽어서 (표 데이터, 지역 목록)을 돌려줍니다.
+       A열(2행부터) = 지역명 / B열(2행부터) = 부서명 / C열(2행부터) = 기관(학교)명  (모두 직제순)"""
+    if not os.path.exists(AGENCY_FILE):
+        raise AppError("파일 없음", "기관현황.xlsx 파일이 존재하지 않습니다.\n프로그램(exe)과 같은 폴더에 넣어주세요.")
     try:
-        time.sleep(2.5)
-        ctypes.windll.user32.keybd_event(VK_MENU, 0, 0, 0) 
-        time.sleep(0.1)
-        ctypes.windll.user32.keybd_event(VK_N, 0, 0, 0)
-        time.sleep(0.1)
-        ctypes.windll.user32.keybd_event(VK_N, 0, KEYEVENTF_KEYUP, 0)
-        time.sleep(0.1)
-        ctypes.windll.user32.keybd_event(VK_MENU, 0, KEYEVENTF_KEYUP, 0)
+        with pd.ExcelFile(AGENCY_FILE) as xl:
+            sheet = '기관현황' if '기관현황' in xl.sheet_names else xl.sheet_names[0]
+            df_agency = xl.parse(sheet, header=None)
+    except PermissionError:
+        raise AppError("파일 열림 오류", "'기관현황.xlsx' 파일을 읽을 수 없습니다.\n엑셀에서 열려 있다면 저장 후 닫고 다시 시도해주세요.")
     except Exception as e:
-        print(f"팝업 제어 예외 발생: {e}")
-    finally:
-        ctypes.windll.user32.keybd_event(VK_MENU, 0, KEYEVENTF_KEYUP, 0)
+        raise AppError("엑셀 읽기 오류", f"'기관현황.xlsx' 분석 중 오류가 발생했습니다.\n{e}")
 
-try:
-    try:
-        hwp = win32.gencache.EnsureDispatch("HWPFrame.HwpObject")
-    except AttributeError:
-        import shutil
-        from importlib import reload
-        cache_path = win32.gencache.GetGeneratePath()
-        shutil.rmtree(cache_path, ignore_errors=True)
-        reload(win32com.client.gencache)
-        hwp = win32.gencache.EnsureDispatch("HWPFrame.HwpObject")    
-    
-    hwp.RegisterModule("FilePathCheckDLL", "SecurityModule")
-    hwp.XHwpWindows.Item(0).Visible = True 
-    
-    threading.Thread(target=auto_allow_popup, daemon=True).start()
-    
-    hwp.Open(hwp_file_path)
-    hwp.SaveAs(temp_txt_path, "TEXT")
-except Exception as e:
-    print(f"\n[오류] 한글 파일 처리 실패: {e}")
-    time.sleep(3)
-    sys.exit()
-finally:
-    try: hwp.Quit()
-    except: pass
-    ctypes.windll.user32.keybd_event(0x12, 0, 0x0002, 0)
+    if df_agency.shape[1] < 3:
+        raise AppError("엑셀 형식 오류", "기관현황.xlsx의 A열(지역명), B열(부서명), C열(기관·학교명) 형식이 아닙니다.")
 
-try:
-    try:
-        with open(temp_txt_path, 'r', encoding='utf-16') as f:
-            text_list = [line.strip() for line in f.readlines() if line.strip()]
-    except:
-        with open(temp_txt_path, 'r', encoding='cp949') as f:
-            text_list = [line.strip() for line in f.readlines() if line.strip()]
-    if os.path.exists(temp_txt_path):
-        os.remove(temp_txt_path)
-except Exception as e:
-    print(f"텍스트 변환 오류: {e}")
-    sys.exit()
+    def clean(v):
+        if pd.isna(v):
+            return ''
+        t = str(v).strip()
+        return '' if t.lower() in ('nan', 'none', '<na>') else t
 
-print("인사발령정리 엑셀의 '기관현황' 시트와 대조를 시작합니다...")
-try:
-    df_agency = pd.read_excel(agency_path, sheet_name='기관현황', header=None)
-except PermissionError:
-    messagebox.showerror("파일 열림 오류", f"'{os.path.basename(agency_path)}' 파일이 이미 엑셀에서 열려 있습니다.\n\n안전한 데이터 처리를 위해 열려있는 엑셀 파일을 완전히 종료한 후 파이썬을 다시 실행해주세요.")
-    sys.exit()
-except Exception as e:
-    messagebox.showerror("엑셀 읽기 오류", f"'기관현황' 시트 분석 중 오류가 발생했습니다.\n{e}")
-    sys.exit()
-    
-try:
-    base_region = str(df_agency.iloc[2, 1]).strip()
-    
-    try:
-        special_agency = str(df_agency.iloc[1, 3]).strip()
-    except IndexError:
-        special_agency = ""
-    
-    df_data = df_agency.iloc[2:1000, 2:5].copy()
-    df_data.columns = ['지역', '임용기관', '부서']
-    
-    df_data['지역'] = df_data['지역'].astype(str).str.strip()
-    df_data['임용기관'] = df_data['임용기관'].astype(str).str.strip()
-    df_data['부서'] = df_data['부서'].astype(str).str.strip()
-    
-    df_local = df_data[df_data['지역'] == base_region]
-    
-    raw_agencies = df_local['임용기관'].replace('nan', '').replace('None', '').dropna().tolist()
-    raw_sub_depts = df_local['부서'].replace('nan', '').replace('None', '').dropna().tolist()
-    
-    if special_agency and special_agency.lower() not in ['nan', 'none']:
-        raw_agencies.append(special_agency)
-    
-    ignore_keywords = [
-        '유치원', '초등학교', '중학교', '고등학교', '특수학교', '대안학교',
-        '교육지원청', '직속기관', '소속기관', '관내학교', '기관명', '부서명',
-        '행정과', '교육과', '총무과', '재정과', '행정국', '교육국', '기획국',
-        '체육건강과', '학교지원센터', '학교지원과', '학생지원과',
-        '유초등교육과', '중등교육과', '창의특수교육과', '인성시민과', '교원인사과',
-        '체육건강안전과', '노사정책과', '예산과', '정책기획과', '미래교육추진단',
-        '공보관', '감사관', '단설유치원', '병설유치원',
-        '행정실', '행정실장', '교무실', '사무관', '서기관', '부이사관', 
-        '주사', '주사보', '서기', '서기보', '서기보시보', '주무관',
-        '지방교육행정', '지방사서', '지방전산', '지방시설',
-        '지방공업', '지방보건', '지방식품위생', '지방간호', '본청', '도교육청',
-        '교육도서관', '학생수련원', '단재교육연수원', '해양교육원', '유아교육진흥원', '특수교육원'
-    ]
-    
-    local_agencies_for_sort = [a for a in raw_agencies if len(a) > 1 and a not in ignore_keywords]
-    dept_order_map = {agency: i for i, agency in enumerate(local_agencies_for_sort)}
-    sub_dept_order_map = {dept: i for i, dept in enumerate(raw_sub_depts) if len(dept) > 1}
-        
-except Exception as e:
-    messagebox.showerror("엑셀 읽기 오류", f"'기관현황' 데이터 처리 중 오류가 발생했습니다.\n{e}")
-    sys.exit()
+    rows = []
+    cur_region = ''
+    for a, b, c in zip(df_agency.iloc[1:, 0].tolist(), df_agency.iloc[1:, 1].tolist(), df_agency.iloc[1:, 2].tolist()):
+        a, b, c = clean(a), clean(b), clean(c)
+        if a:
+            cur_region = a          # 지역명이 비어 있는 줄은 바로 위 지역을 이어받음(병합 셀 대비)
+        if cur_region and (b or c):
+            rows.append((cur_region, b, c))
+    df_data = pd.DataFrame(rows, columns=['지역', '부서', '기관'])
+
+    regions = []
+    for r in df_data['지역'].tolist():
+        if r not in regions:
+            regions.append(r)
+    if not regions:
+        raise AppError("엑셀 형식 오류", "기관현황.xlsx의 A열(2행부터)에서 지역명을 찾지 못했습니다.")
+    return df_data, regions
+
+
+def apply_region(df_data, region):
+    """선택한 지역의 기관·부서 순서(직제순)를 판정/정렬용 자료에 반영합니다."""
+    df_local = df_data[df_data['지역'] == region]
+    raw_agencies = [x for x in df_local['기관'].tolist() if x]
+    raw_sub_depts = [x for x in df_local['부서'].tolist() if x]
+
+    if not raw_agencies:
+        raise AppError("기관 없음", f"기관현황.xlsx에 '{region}' 지역의 기관(C열)이 없습니다.")
+
+    raw_agencies.extend(ALWAYS_INCLUDED_AGENCIES)
+
+    local_agencies_for_sort[:] = [a for a in raw_agencies if len(a) > 1 and a not in ignore_keywords]
+    dept_order_map.clear()
+    dept_order_map.update({agency: i for i, agency in enumerate(local_agencies_for_sort)})
+    sub_dept_order_map.clear()
+    sub_dept_order_map.update({dept: i for i, dept in enumerate(raw_sub_depts) if len(dept) > 1})
+
 
 def get_dept_order(dept_str):
     clean_dept = re.sub(r'[^가-힣a-zA-Z0-9]', '', str(dept_str))
@@ -356,7 +321,80 @@ def sort_key_out(row):
     d_order = get_dept_order(row['현임 부서_'])
     return (r_order, s_order, g_order, d_order, str(row['성명_']))
 
-try:
+
+# ==================================================
+# ★ 한글(hwp) 파일에서 텍스트 추출
+# ==================================================
+def auto_allow_popup():
+    """한글 보안 팝업창 자동 허용 (Alt+N)"""
+    VK_MENU = 0x12
+    VK_N = 0x4E
+    KEYEVENTF_KEYUP = 0x0002
+
+    try:
+        time.sleep(2.5)
+        ctypes.windll.user32.keybd_event(VK_MENU, 0, 0, 0)
+        time.sleep(0.1)
+        ctypes.windll.user32.keybd_event(VK_N, 0, 0, 0)
+        time.sleep(0.1)
+        ctypes.windll.user32.keybd_event(VK_N, 0, KEYEVENTF_KEYUP, 0)
+        time.sleep(0.1)
+        ctypes.windll.user32.keybd_event(VK_MENU, 0, KEYEVENTF_KEYUP, 0)
+    except Exception as e:
+        print(f"팝업 제어 예외 발생: {e}")
+    finally:
+        ctypes.windll.user32.keybd_event(VK_MENU, 0, KEYEVENTF_KEYUP, 0)
+
+
+def extract_hwp_text(hwp_file_path):
+    temp_txt_path = os.path.join(BASE_DIR, "temp_발령서_임시추출.txt")
+    hwp = None
+    try:
+        try:
+            hwp = win32.gencache.EnsureDispatch("HWPFrame.HwpObject")
+        except AttributeError:
+            import shutil
+            from importlib import reload
+            cache_path = win32.gencache.GetGeneratePath()
+            shutil.rmtree(cache_path, ignore_errors=True)
+            reload(win32com.client.gencache)
+            hwp = win32.gencache.EnsureDispatch("HWPFrame.HwpObject")
+
+        hwp.RegisterModule("FilePathCheckDLL", "SecurityModule")
+        hwp.XHwpWindows.Item(0).Visible = True
+
+        threading.Thread(target=auto_allow_popup, daemon=True).start()
+
+        hwp.Open(hwp_file_path)
+        hwp.SaveAs(temp_txt_path, "TEXT")
+    except Exception as e:
+        raise AppError("한글 파일 오류", f"한글 파일 처리에 실패했습니다.\n{e}")
+    finally:
+        try:
+            hwp.Quit()
+        except Exception:
+            pass
+        ctypes.windll.user32.keybd_event(0x12, 0, 0x0002, 0)
+
+    try:
+        try:
+            with open(temp_txt_path, 'r', encoding='utf-16') as f:
+                text_list = [line.strip() for line in f.readlines() if line.strip()]
+        except Exception:
+            with open(temp_txt_path, 'r', encoding='cp949') as f:
+                text_list = [line.strip() for line in f.readlines() if line.strip()]
+        if os.path.exists(temp_txt_path):
+            os.remove(temp_txt_path)
+    except Exception as e:
+        raise AppError("텍스트 변환 오류", f"텍스트 변환 중 오류가 발생했습니다.\n{e}")
+    return text_list
+
+
+# ==================================================
+# ★ 발령 내용 분석 → '전의' 시트가 담긴 엑셀(워크북) 만들기
+#    (아래 본문은 기존 코드의 분류·정렬 로직을 그대로 가져왔습니다)
+# ==================================================
+def build_report(text_list):
     chunks = []
     current_chunk = []
     recording = False
@@ -382,7 +420,8 @@ try:
     if current_chunk:
         chunks.append(current_chunk)
 
-    first_date_str = "YYYY. M. D."
+    _now = datetime.now()
+    first_date_str = f"{_now.year}. {_now.month}. {_now.day}."
     for chunk in chunks:
         if chunk and date_pattern.match(chunk[-1]):
             raw_date = chunk[-1]
@@ -810,8 +849,6 @@ try:
         
         worksheet.print_title_rows = '1:3'   
 
-    output_file = agency_path
-    
     jeoneuian_sections = [
         ("[ 1그룹 5급 이상 전입 ]", "[ 1그룹 5급 이상 전출 ]", jeoneuian_dict["1_5"]["in"], jeoneuian_dict["1_5"]["out"]),
         ("[ 1그룹 6급 전입 ]", "[ 1그룹 6급 전출 ]", jeoneuian_dict["1_6"]["in"], jeoneuian_dict["1_6"]["out"]),
@@ -823,32 +860,324 @@ try:
         ("[ 임기제 전입 ]", "[ 임기제 전출 ]", jeoneuian_dict["임기제"]["in"], jeoneuian_dict["임기제"]["out"])
     ]
 
-    wb = openpyxl.load_workbook(output_file)
-                
+    wb = openpyxl.Workbook()
+    wb.remove(wb.active)   # 새 파일의 기본 빈 시트 제거
+
     write_sheet_data(wb, '전의', f"{first_date_str} 자 지방공무원 인사발령 전의 기초자료", jeoneuian_sections)
-    
-    if '전의' in wb.sheetnames:
-        wb.active = wb.sheetnames.index('전의')
-        for ws in wb.worksheets:
-            if ws.views:
-                ws.views.sheetView[0].tabSelected = False
-        wb.active.views.sheetView[0].tabSelected = True
-    
-    wb.save(output_file)
-    wb.close()
 
-    print(f"\n작업 완료! 기존 파일에 '전의' 시트가 성공적으로 생성되었습니다!")
-    print(f"'{os.path.basename(output_file)}' 파일이 화면에 자동으로 열립니다!")
-    time.sleep(1)
+    wb.active = 0
+    return wb, first_date_str
 
+
+# ==================================================
+# ★ 설정 저장/불러오기 (현재 상태 기억하기)
+# ==================================================
+def load_settings():
     try:
-        os.startfile(output_file)
-    except Exception as e:
-        print(f"엑셀 파일을 자동으로 여는 데 실패했습니다: {e}")
+        with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
 
-except PermissionError: 
-    messagebox.showerror("파일 열림 오류", f"'{os.path.basename(output_file)}' 파일이 이미 열려 있어 덮어쓸 수 없습니다.\n엑셀을 완전히 종료하고 다시 실행해주세요.")
-except Exception as e:
-    error_msg = traceback.format_exc()
-    print(f"\n[오류 발생] 데이터 분석 또는 엑셀 생성 중 문제가 발생했습니다.\n{error_msg}")
-    messagebox.showerror("프로그램 오류", f"데이터 분석 또는 엑셀 생성 중 오류가 발생했습니다.\n\n터미널(콘솔) 창의 에러 메시지를 확인해주세요.\n원인: {e}")
+def save_settings(data):
+    try:
+        with open(SETTINGS_FILE, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+# ==================================================
+# ★ 화면(GUI)
+# ==================================================
+FONT = "맑은 고딕"
+C_BG = "#F3F5F9"
+C_CARD = "#FFFFFF"
+C_BORDER = "#D5DBE6"
+C_ACCENT = "#2563EB"
+C_ACCENT_HOVER = "#1D4ED8"
+C_TEXT = "#1F2937"
+C_SUB = "#6B7280"
+C_SOFT = "#E8EEFB"
+C_SOFT_HOVER = "#D6E1F8"
+
+
+class App(ctk.CTk, TkinterDnD.DnDWrapper):
+    def __init__(self, regions):
+        super().__init__()
+        self.TkdndVersion = TkinterDnD._require(self)
+
+        self.title(f"personnel_appointment v{current_version}")
+        self.geometry("780x640")
+        self.resizable(False, False)
+        self.configure(fg_color=C_BG)
+
+        self.regions = list(regions)
+        self.hwp_path = ""
+        self._loading = True
+
+        saved = load_settings()
+        remember = bool(saved.get("remember", False))
+        region0 = saved.get("region", "") if remember else ""
+        if region0 not in self.regions:
+            region0 = self.regions[0]
+        save_mode0 = saved.get("save_mode", "same") if remember else "same"
+        if save_mode0 not in ("same", "ask"):
+            save_mode0 = "same"
+
+        self.var_region = tk.StringVar(value=region0)
+        self.var_remember = tk.BooleanVar(value=remember)
+        self.var_save_mode = tk.StringVar(value=save_mode0)
+
+        self.build_ui()
+        self.register_drop_targets(self)
+
+        self._loading = False
+        for v in (self.var_region, self.var_remember, self.var_save_mode):
+            v.trace_add("write", lambda *a: self.persist())
+
+        self.protocol("WM_DELETE_WINDOW", self.on_close)
+        self.after(600, self.check_update_once)
+
+    # ---------- 화면 만들기 ----------
+    def build_ui(self):
+        self.grid_columnconfigure(0, weight=1)
+
+        title = ctk.CTkLabel(self, text="인사발령 정리", font=ctk.CTkFont(FONT, 24, "bold"), text_color=C_TEXT)
+        title.grid(row=0, column=0, padx=28, pady=(22, 0), sticky="w")
+        sub = ctk.CTkLabel(self, text="도교육청 인사발령서에서 선택한 지역의 전입·전출을 정리해 엑셀로 저장합니다.",
+                           font=ctk.CTkFont(FONT, 13), text_color=C_SUB)
+        sub.grid(row=1, column=0, padx=28, pady=(2, 14), sticky="w")
+
+        # ----- 가운데: 왼쪽(인사발령서) + 오른쪽(지역/기관현황) -----
+        mid = ctk.CTkFrame(self, fg_color="transparent")
+        mid.grid(row=2, column=0, padx=28, sticky="ew")
+        mid.grid_columnconfigure(0, weight=3, uniform="mid")
+        mid.grid_columnconfigure(1, weight=2, uniform="mid")
+
+        # 왼쪽 카드: 드롭 영역
+        drop = ctk.CTkFrame(mid, fg_color=C_CARD, corner_radius=14, border_width=2, border_color=C_ACCENT)
+        drop.grid(row=0, column=0, padx=(0, 10), sticky="nsew")
+        ctk.CTkLabel(drop, text="📄", font=ctk.CTkFont(FONT, 38)).pack(pady=(22, 0))
+        ctk.CTkLabel(drop, text="도교육청 인사발령서를\n여기로 끌어다 놓으세요",
+                     font=ctk.CTkFont(FONT, 15, "bold"), text_color=C_TEXT).pack(pady=(4, 2))
+        ctk.CTkLabel(drop, text="(hwp, hwpx)", font=ctk.CTkFont(FONT, 12), text_color=C_SUB).pack()
+        ctk.CTkButton(drop, text="인사발령서 선택", width=170, height=36, corner_radius=10,
+                      font=ctk.CTkFont(FONT, 14, "bold"), fg_color=C_ACCENT, hover_color=C_ACCENT_HOVER,
+                      command=self.pick_file).pack(pady=(14, 8))
+        self.lbl_file = ctk.CTkLabel(drop, text="선택된 파일 없음", font=ctk.CTkFont(FONT, 12),
+                                     text_color=C_SUB, wraplength=330)
+        self.lbl_file.pack(pady=(0, 18), padx=12)
+
+        # 오른쪽 카드: 지역 + 기관현황 열기
+        side = ctk.CTkFrame(mid, fg_color=C_CARD, corner_radius=14, border_width=1, border_color=C_BORDER)
+        side.grid(row=0, column=1, padx=(10, 0), sticky="nsew")
+        ctk.CTkLabel(side, text="지역 선택", font=ctk.CTkFont(FONT, 14, "bold"),
+                     text_color=C_TEXT).pack(anchor="w", padx=18, pady=(20, 6))
+        row = ctk.CTkFrame(side, fg_color="transparent")
+        row.pack(fill="x", padx=18)
+        self.menu_region = ctk.CTkOptionMenu(row, values=self.regions, variable=self.var_region, height=36,
+                                             font=ctk.CTkFont(FONT, 14), dropdown_font=ctk.CTkFont(FONT, 14),
+                                             fg_color=C_SOFT, button_color=C_ACCENT, button_hover_color=C_ACCENT_HOVER,
+                                             text_color=C_TEXT)
+        self.menu_region.pack(side="left", fill="x", expand=True)
+        ctk.CTkButton(row, text="↻", width=36, height=36, corner_radius=8, font=ctk.CTkFont(FONT, 16, "bold"),
+                      fg_color=C_SOFT, hover_color=C_SOFT_HOVER, text_color=C_ACCENT,
+                      command=self.refresh_regions).pack(side="left", padx=(6, 0))
+        ctk.CTkLabel(side, text="↻ : 기관현황.xlsx를 고친 뒤\n지역 목록 새로고침", justify="left",
+                     font=ctk.CTkFont(FONT, 11), text_color=C_SUB).pack(anchor="w", padx=18, pady=(6, 0))
+        ctk.CTkButton(side, text="기관현황 열기", height=36, corner_radius=10, font=ctk.CTkFont(FONT, 14, "bold"),
+                      fg_color=C_SOFT, hover_color=C_SOFT_HOVER, text_color=C_ACCENT,
+                      command=self.open_agency_file).pack(fill="x", padx=18, pady=(18, 20))
+
+        # ----- 옵션 -----
+        opt = ctk.CTkFrame(self, fg_color=C_CARD, corner_radius=14, border_width=1, border_color=C_BORDER)
+        opt.grid(row=3, column=0, padx=28, pady=(14, 0), sticky="ew")
+        ctk.CTkLabel(opt, text="옵션", font=ctk.CTkFont(FONT, 14, "bold"),
+                     text_color=C_TEXT).grid(row=0, column=0, columnspan=3, padx=18, pady=(14, 6), sticky="w")
+        ctk.CTkCheckBox(opt, text="현재 상태 기억하기 (지역과 옵션값을 저장했다가 다음 실행 때 불러옵니다)",
+                        variable=self.var_remember, font=ctk.CTkFont(FONT, 13), text_color=C_TEXT,
+                        fg_color=C_ACCENT, hover_color=C_ACCENT_HOVER).grid(row=1, column=0, columnspan=3, padx=18, pady=(0, 8), sticky="w")
+        ctk.CTkLabel(opt, text="결과물 저장 위치", font=ctk.CTkFont(FONT, 13, "bold"),
+                     text_color=C_TEXT).grid(row=2, column=0, columnspan=3, padx=18, pady=(4, 4), sticky="w")
+        ctk.CTkRadioButton(opt, text="도교육청 인사발령서가 있는 폴더", variable=self.var_save_mode, value="same",
+                           font=ctk.CTkFont(FONT, 13), text_color=C_TEXT,
+                           fg_color=C_ACCENT, hover_color=C_ACCENT_HOVER).grid(row=3, column=0, columnspan=3, padx=18, pady=3, sticky="w")
+        ctk.CTkRadioButton(opt, text="직접 선택하여 저장 ([정리 시작]을 누르면 저장할 폴더를 묻습니다)",
+                           variable=self.var_save_mode, value="ask",
+                           font=ctk.CTkFont(FONT, 13), text_color=C_TEXT,
+                           fg_color=C_ACCENT, hover_color=C_ACCENT_HOVER).grid(row=4, column=0, columnspan=3, padx=18, pady=(3, 14), sticky="w")
+
+        # ----- 실행 -----
+        self.btn_run = ctk.CTkButton(self, text="정리 시작", height=48, corner_radius=12,
+                                     font=ctk.CTkFont(FONT, 17, "bold"), fg_color=C_ACCENT,
+                                     hover_color=C_ACCENT_HOVER, command=self.start)
+        self.btn_run.grid(row=4, column=0, padx=28, pady=(16, 6), sticky="ew")
+        self.lbl_status = ctk.CTkLabel(self, text="인사발령서를 선택하고 지역을 고른 뒤 [정리 시작]을 눌러주세요.",
+                                       font=ctk.CTkFont(FONT, 12), text_color=C_SUB)
+        self.lbl_status.grid(row=5, column=0, padx=28, pady=(0, 10))
+
+    # ---------- 드래그 앤 드롭 ----------
+    def register_drop_targets(self, widget):
+        """창 안의 어느 곳에 놓아도 받을 수 있도록 모든 위젯에 등록합니다."""
+        try:
+            widget.drop_target_register(DND_FILES)
+            widget.dnd_bind('<<Drop>>', self.on_drop)
+        except Exception:
+            pass
+        for child in widget.winfo_children():
+            self.register_drop_targets(child)
+
+    def on_drop(self, event):
+        try:
+            files = self.tk.splitlist(event.data)
+        except Exception:
+            files = [event.data]
+        for f in files:
+            if str(f).lower().endswith(('.hwp', '.hwpx')):
+                self.set_hwp(str(f))
+                return
+        messagebox.showwarning("파일 형식 확인", "한글 파일(hwp, hwpx)만 사용할 수 있습니다.", parent=self)
+
+    # ---------- 버튼 동작 ----------
+    def set_hwp(self, path):
+        self.hwp_path = path
+        self.lbl_file.configure(text=os.path.basename(path), text_color=C_TEXT)
+        self.set_status("인사발령서가 선택되었습니다. 지역을 확인하고 [정리 시작]을 눌러주세요.")
+
+    def pick_file(self):
+        path = filedialog.askopenfilename(
+            parent=self, title="도교육청 인사발령서 파일 선택",
+            filetypes=[("한글 파일", "*.hwp *.hwpx"), ("모든 파일", "*.*")])
+        if path:
+            self.set_hwp(path)
+
+    def open_agency_file(self):
+        if not os.path.exists(AGENCY_FILE):
+            messagebox.showerror("파일 없음", "기관현황.xlsx 파일이 존재하지 않습니다.\n프로그램(exe)과 같은 폴더에 넣어주세요.", parent=self)
+            return
+        try:
+            os.startfile(AGENCY_FILE)
+        except Exception as e:
+            messagebox.showerror("열기 실패", f"기관현황.xlsx를 여는 데 실패했습니다.\n{e}", parent=self)
+
+    def refresh_regions(self):
+        try:
+            _, regions = read_agency_table()
+        except AppError as e:
+            messagebox.showerror(e.title, str(e), parent=self)
+            return False
+        self.regions = regions
+        self.menu_region.configure(values=regions)
+        if self.var_region.get() not in regions:
+            self.var_region.set(regions[0])
+        return True
+
+    def set_status(self, text):
+        self.lbl_status.configure(text=text)
+        self.update()
+
+    def persist(self):
+        if self._loading:
+            return
+        if self.var_remember.get():
+            save_settings({
+                "remember": True,
+                "region": self.var_region.get(),
+                "save_mode": self.var_save_mode.get(),
+            })
+        else:
+            save_settings({"remember": False})
+
+    def on_close(self):
+        self.persist()
+        self.destroy()
+
+    def check_update_once(self):
+        if check_for_update(self):
+            self.on_close()
+
+    # ---------- 정리 실행 ----------
+    def start(self):
+        if not self.hwp_path or not os.path.exists(self.hwp_path):
+            messagebox.showwarning("인사발령서 선택", "도교육청 인사발령서 파일을 먼저 선택해주세요.", parent=self)
+            return
+
+        region = self.var_region.get()
+        self.btn_run.configure(state="disabled", text="처리 중입니다...")
+        try:
+            self.set_status("기관현황.xlsx를 읽고 있습니다...")
+            df_data, regions = read_agency_table()
+            if region not in regions:
+                raise AppError("지역 확인", f"기관현황.xlsx에 '{region}' 지역이 없습니다.\n지역을 다시 선택해주세요.")
+            apply_region(df_data, region)
+
+            if self.var_save_mode.get() == "ask":
+                out_dir = filedialog.askdirectory(
+                    parent=self, title="결과물을 저장할 폴더 선택",
+                    initialdir=os.path.dirname(self.hwp_path))
+                if not out_dir:
+                    self.set_status("저장할 폴더를 선택하지 않아 작업을 취소했습니다.")
+                    return
+            else:
+                out_dir = os.path.dirname(self.hwp_path)
+
+            self.set_status("한글 파일에서 데이터를 추출하고 있습니다... (한글 창이 잠시 열립니다)")
+            text_list = extract_hwp_text(self.hwp_path)
+
+            self.set_status("인사발령을 분류·정렬하고 있습니다...")
+            wb, date_str = build_report(text_list)
+
+            out_path = os.path.join(out_dir, f"{date_str} 인사발령 전의 기초자료.xlsx")
+            if os.path.exists(out_path):
+                if not messagebox.askyesno("덮어쓰기 확인", f"같은 이름의 파일이 이미 있습니다.\n덮어쓰시겠습니까?\n\n{out_path}", parent=self):
+                    self.set_status("저장을 취소했습니다.")
+                    return
+            try:
+                wb.save(out_path)
+            except PermissionError:
+                raise AppError("파일 열림 오류", f"'{os.path.basename(out_path)}' 파일이 이미 열려 있어 저장할 수 없습니다.\n엑셀을 완전히 종료하고 다시 실행해주세요.")
+            finally:
+                wb.close()
+
+            self.set_status(f"완료! '{os.path.basename(out_path)}' 파일을 저장했습니다.")
+            try:
+                os.startfile(out_path)
+            except Exception as e:
+                messagebox.showwarning("파일 열기 실패", f"저장은 완료되었지만 자동으로 여는 데 실패했습니다.\n{out_path}\n{e}", parent=self)
+
+        except AppError as e:
+            self.set_status("오류가 발생했습니다.")
+            messagebox.showerror(e.title, str(e), parent=self)
+        except Exception as e:
+            err = traceback.format_exc()
+            print(err)
+            self.set_status("오류가 발생했습니다.")
+            messagebox.showerror("프로그램 오류", f"데이터 분석 또는 엑셀 생성 중 오류가 발생했습니다.\n\n원인: {e}", parent=self)
+        finally:
+            self.btn_run.configure(state="normal", text="정리 시작")
+
+
+# ==================================================
+# ★ 시작
+# ==================================================
+def main():
+    try:
+        _, regions = read_agency_table()
+    except AppError as e:
+        r = tk.Tk()
+        r.withdraw()
+        if "존재하지 않습니다" in str(e):
+            messagebox.showerror("파일 없음", "기관현황.xlsx 파일이 없어 프로그램을 종료합니다.\n\n프로그램(exe)과 같은 폴더에 기관현황.xlsx를 넣고 다시 실행해주세요.")
+        else:
+            messagebox.showerror(e.title, f"{e}\n\n프로그램을 종료합니다.")
+        sys.exit()
+
+    ctk.set_appearance_mode("light")
+    app = App(regions)
+    app.mainloop()
+
+
+if __name__ == "__main__":
+    main()
